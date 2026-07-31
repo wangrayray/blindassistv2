@@ -1,0 +1,7 @@
+__pycache__/
+*.pt
+*.onnx
+*.engine
+*.mp4
+weights/
+testfiles/

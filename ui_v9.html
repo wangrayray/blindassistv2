@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>視障輔助系統 v9</title>
+    <style>
+        :root{
+            --bg:#000; --panel:#1c1c1e; --panel-2:#2c2c2e; --line:#48484a;
+            --txt:#fff; --muted:#9a9a9e;
+            --idle:#8e8e93; --daily:#30d158; --traffic:#ff453a;
+            --search:#0a84ff; --vlm:#bf5af2; --pending:#ffd60a; --danger:#8B2C2C;
+        }
+        *{ box-sizing:border-box; }
+        body {
+            margin:0; background:var(--bg); color:var(--txt);
+            font-family:"Microsoft JhengHei","PingFang TC",sans-serif;
+            height:100vh; overflow:hidden;
+            user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
+            display:flex; flex-direction:column; justify-content:center; align-items:center;
+        }
+
+        /* 頂部狀態列 */
+        #statusbar{
+            position:fixed; top:0; left:0; width:100%; height:5vh; min-height:34px;
+            display:flex; align-items:center; justify-content:space-between;
+            padding:0 14px; font-size:0.85rem; color:var(--muted);
+            background:linear-gradient(#000,rgba(0,0,0,0)); z-index:50;
+        }
+        #conn{ display:flex; align-items:center; gap:7px; }
+        #conn-dot{ width:11px; height:11px; border-radius:50%; background:var(--idle);
+            box-shadow:0 0 8px currentColor; transition:background .3s; }
+        #conn-dot.ok{ background:var(--daily); color:var(--daily); }
+        #conn-dot.bad{ background:var(--traffic); color:var(--traffic); }
+
+        #mode-display {
+            font-size:18vw; font-weight:800; text-align:center; line-height:1.05;
+            transition:color .25s ease, transform .12s ease;
+            text-shadow:0 0 26px rgba(255,255,255,.18);
+            z-index:10;
+        }
+        #mode-display .sub{ font-size:.42em; font-weight:600; color:var(--muted); }
+        .pop { transform:scale(1.12); }
+        .vlm-active { animation:vlmPulse 1s ease-in-out infinite; }
+        @keyframes vlmPulse { 0%,100%{opacity:1;} 50%{opacity:.45;} }
+
+        .hint-text {
+            position:absolute; bottom:18px; font-size:1rem; color:var(--muted);
+            text-align:center; line-height:1.7; pointer-events:none; padding:0 12px;
+        }
+        .hint-text b{ color:#d8d8dc; font-weight:700; }
+
+        /* aria 即時區 (給螢幕報讀軟體;畫面不可見) */
+        .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+            overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+
+        #search-overlay, #vlm-overlay {
+            position:fixed; inset:0; background:#111; z-index:100;
+            display:flex; flex-direction:column;
+            transform:translateY(100%); transition:transform .28s;
+        }
+        #search-overlay.open, #vlm-overlay.open { transform:translateY(0); }
+        .overlay-header {
+            flex:0 0 9vh; background:var(--panel); display:flex; align-items:center;
+            justify-content:center; font-size:1.4rem; font-weight:700;
+            border-bottom:2px solid var(--line);
+        }
+        /* 連續滑動掃描面(取代原本 2x2 方格分頁點選)
+           為什麼改:2x2 分頁要「上滑換頁 → 聽完四個 → 點選 → 再點確認」,
+           盲用時每換一頁都要重新建立空間位置記憶,選項一多就非常累。
+           連續掃描把整份清單攤成一條水平軸,手指滑到哪就念到哪,
+           放開 = 待確認,輕點 = 確認。全程只需要一根手指、不需要記位置。 */
+        .scrub-area {
+            flex:1; position:relative; display:flex; flex-direction:column;
+            justify-content:center; align-items:center; padding:10px;
+            background:var(--panel-2); border:3px solid var(--line);
+            border-radius:16px; margin:10px; touch-action:none; user-select:none;
+        }
+        #scrub-label { font-size:3.2rem; font-weight:800; text-align:center; line-height:1.2; }
+        #scrub-index { margin-top:12px; font-size:1.1rem; opacity:.75; }
+        #scrub-bar {
+            position:absolute; left:0; bottom:0; height:8px;
+            background:var(--search); border-radius:0 4px 4px 0; transition:width .06s linear;
+        }
+        .scrub-area.pending {
+            background:var(--pending); color:#000; border-color:#fff;
+            box-shadow:0 0 24px rgba(255,214,10,.6);
+        }
+
+        .vlm-content { flex:1; display:flex; flex-direction:column; padding:10px; gap:10px; }
+        .vlm-half {
+            flex:1; display:flex; flex-direction:column; justify-content:center; align-items:center;
+            border:3px solid var(--line); border-radius:18px; transition:all .18s;
+        }
+        .vlm-half:active{ transform:scale(.98); }
+        .vlm-half .icon { font-size:4rem; margin-bottom:10px; }
+        .vlm-half .label { font-size:2.3rem; font-weight:800; }
+        .vlm-half .sub   { font-size:1.05rem; color:var(--muted); margin-top:6px; }
+        .vlm-half.describe-half { background:#103d24; }
+        .vlm-half.ocr-half      { background:#3d1022; }
+        .vlm-half.pending {
+            background:var(--pending) !important; color:#000 !important;
+            border-color:#fff !important; transform:scale(.97);
+            box-shadow:0 0 24px rgba(255,214,10,.6);
+        }
+
+        .overlay-footer { flex:0 0 14vh; background:var(--panel); border-top:2px solid var(--line);
+            display:flex; flex-direction:column; }
+        .footer-hint { flex:0 0 auto; text-align:center; color:var(--muted);
+            font-size:.95rem; padding:8px 0; }
+        .footer-btn {
+            flex:1; background:var(--danger); color:#fff; border:none; width:100%;
+            font-size:1.4rem; font-weight:800; cursor:pointer;
+            display:flex; align-items:center; justify-content:center;
+        }
+        .footer-btn:active { background:#6B1C1C; }
+        .page-indicator { color:var(--muted); font-size:.9rem; }
+    </style>
+</head>
+<body>
+
+    <div id="statusbar">
+        <div id="conn"><span id="conn-dot"></span><span id="conn-text">連線中…</span></div>
+        <div id="clock"></div>
+    </div>
+
+    <div id="mode-display" style="color:var(--idle);">🔇 待機</div>
+
+    <div class="hint-text">
+        <b>↑</b> 找物品 &nbsp;|&nbsp; <b>↓</b> 日常模式<br>
+        <b>←</b> 紅綠燈 &nbsp;|&nbsp; <b>→</b> AI 描述／朗讀<br>
+        雙擊：待機 &nbsp;·&nbsp; 長按：複誦模式 &nbsp;·&nbsp; 按住 2 秒：手勢說明
+    </div>
+
+    <div id="aria-live" class="sr-only" role="status" aria-live="assertive"></div>
+
+    <div id="search-overlay">
+        <div class="overlay-header">選擇目標 <span id="page-indicator" class="page-indicator"></span></div>
+        <div class="scrub-area" id="scrub-area">
+            <div id="scrub-label">左右滑動選擇</div>
+            <div id="scrub-index"></div>
+            <div id="scrub-bar" style="width:0"></div>
+        </div>
+        <div class="overlay-footer">
+            <div class="footer-hint">← → 滑動選擇 · 放開後輕點確認 · ↓↓ 用力下滑關閉</div>
+            <button class="footer-btn" onclick="closeSearchMenu()">🔙 取消</button>
+        </div>
+    </div>
+
+    <div id="vlm-overlay">
+        <div class="overlay-header">AI 視覺功能（點選後再按一次確認）</div>
+        <div class="vlm-content">
+            <div class="vlm-half describe-half" id="vlm-describe">
+                <div class="icon">🔍</div><div class="label">場景描述</div><div class="sub">Describe</div>
+            </div>
+            <div class="vlm-half ocr-half" id="vlm-ocr">
+                <div class="icon">📖</div><div class="label">朗讀文字</div><div class="sub">OCR</div>
+            </div>
+        </div>
+        <div class="overlay-footer">
+            <div class="footer-hint">點選功能，再按一次確認</div>
+            <button class="footer-btn" onclick="closeVLMMenu()">🔙 取消</button>
+        </div>
+    </div>
+
+<script>
+/* =========================================================
+ * 語音佇列 + 優先級 (警報插隊)
+ *   prio: 0=清單/旁白  1=操作回饋  2=系統警報(server)
+ *   高 prio 會打斷正在播的較低 prio;同級 FIFO 排隊。
+ *   1.5 秒內完全相同字串去重 (主要擋輪詢重播)。
+ * ========================================================= */
+const synth = window.speechSynthesis;
+const aria = document.getElementById('aria-live');
+let q = [];
+let speaking = false, curPrio = -1, curUtter = null;
+let lastText = '', lastTextTime = 0;
+
+function _process(){
+    if (speaking || q.length === 0) return;
+    const item = q.shift();
+    speaking = true; curPrio = item.prio;
+    aria.textContent = item.text;                 // 螢幕報讀
+    const u = new SpeechSynthesisUtterance(item.text);
+    u.lang = 'zh-TW'; u.rate = 1.15;
+    const done = () => { speaking = false; curPrio = -1; curUtter = null; _process(); };
+    u.onend = done; u.onerror = done;
+    curUtter = u;
+    try { synth.speak(u); } catch(e){ done(); }
+}
+function say(text, prio = 1, interrupt = false){
+    if (!text) return;
+    const now = Date.now();
+    if (text === lastText && now - lastTextTime < 1500) return;   // 去重
+    lastText = text; lastTextTime = now;
+
+    // interrupt(即時狀態/警報):最新的最重要 → 丟掉同級及以下的舊隊列,
+    // 並立刻打斷目前正在播的(只要不是更高優先級),直接念最新這條。
+    // 根治「念著幾秒前的過時提示、新狀況一直延遲堆積」的問題。
+    if (interrupt){
+        q = q.filter(it => it.prio > prio);           // 清掉同級與更低的舊貨
+        if (speaking && curPrio <= prio){
+            if (curUtter){ curUtter.onend = null; curUtter.onerror = null; }
+            try { synth.cancel(); } catch(e){}
+            speaking = false; curPrio = -1; curUtter = null;
+        }
+        q.push({ text, prio });
+        _process();
+        return;
+    }
+
+    const item = { text, prio };
+    // 依 prio 由高到低、穩定插入
+    let i = q.length;
+    while (i > 0 && q[i-1].prio < prio) i--;
+    q.splice(i, 0, item);
+    // 插隊:有新的較高 prio 而目前正在播較低 prio → 打斷
+    if (speaking && prio > curPrio){
+        if (curUtter) { curUtter.onend = null; curUtter.onerror = null; }
+        try { synth.cancel(); } catch(e){}
+        speaking = false; curPrio = -1; curUtter = null;
+    }
+    _process();
+}
+const sayUI    = t => say(t, 1);   // 操作回饋
+const sayList  = t => say(t, 0);   // 冗長旁白 (可被警報蓋過)
+const sayAlert = t => say(t, 2, true);   // 系統警報 (插隊 + 打斷舊的,只念最新)
+
+function vibrate(p){ if (navigator.vibrate) navigator.vibrate(p); }
+
+/* 各方向不同觸覺,鬆手即回饋方位 */
+const HAPTIC = {
+    up:[40,30,40], down:[70], left:[30,40,30,40,30], right:[45,45],
+    idle:[90,50,90], tap:[25], page:[20], confirm:[30], longpress:[120]
+};
+
+/* =========================================================
+ * 模式切換 (秒數鎖已移除,改為極短去抖防手震)
+ * ========================================================= */
+let currentMode = 'idle';
+let currentTarget = null;
+const modeDisplay = document.getElementById('mode-display');
+const MODE_META = {
+    idle:    {t:'🔇 待機',  c:'var(--idle)'},
+    daily:   {t:'🛡️ 日常',  c:'var(--daily)'},
+    traffic: {t:'🚥 紅綠燈', c:'var(--traffic)'},
+    search:  {t:'🔍 尋找',  c:'var(--search)'},
+};
+
+let lastActionTime = 0, lastAction = '';
+function debounced(action){
+    const now = Date.now();
+    // 同一動作 250ms 內視為手震,忽略;不同動作不擋
+    if (action === lastAction && now - lastActionTime < 250) return false;
+    lastActionTime = now; lastAction = action;
+    return true;
+}
+
+function setMode(mode, target = null){
+    if (!debounced('mode:' + mode + (target||''))) return;
+    vibrate(HAPTIC.confirm);
+    modeDisplay.classList.add('pop');
+    setTimeout(()=>modeDisplay.classList.remove('pop'), 150);
+
+    currentMode = mode; currentTarget = target;
+    const m = MODE_META[mode] || MODE_META.idle;
+    if (mode === 'search'){
+        modeDisplay.innerHTML = `🔍 尋找<br><span class="sub">${target}</span>`;
+        modeDisplay.style.color = m.c;
+    } else {
+        modeDisplay.innerText = m.t;
+        modeDisplay.style.color = m.c;
+    }
+    // 切模式語音由後端 /api/mode 送達後播報 (狀態確認更可靠,且避免前後端重複);
+    // 前端只給「觸覺 + 畫面」即時回饋。
+
+    fetch('/api/mode', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ mode, target })
+    }).then(r => { if(!r.ok) throw new Error('伺服器錯誤'); return r.json(); })
+      .catch(e => { console.error('API:', e); sayAlert('系統連線失敗'); });
+}
+
+function repeatCurrentMode(){
+    vibrate(HAPTIC.longpress);
+    if (currentMode === 'search')
+        sayUI(`目前模式：尋找 ${currentTarget || ''}`);
+    else
+        sayUI('目前模式：' + (MODE_META[currentMode]||MODE_META.idle).t.replace(/^[^\u4e00-\u9fa5]+/, ''));
+}
+
+/* =========================================================
+ * 手勢:滑動 / 雙擊 / 長按  (選單開啟時停用底層手勢)
+ * ========================================================= */
+let sx=0, sy=0, ex=0, ey=0, lastTap=0, lpTimer=null, lpFired=false;
+/* 滑動門檻改成螢幕比例:寫死 50px 在小螢幕手機上太靈敏(誤觸),
+   在大螢幕平板上又太鈍(滑不動)。取短邊的 12%,各種尺寸手感一致。
+   LONGPRESS_MS 600 → 複誦模式;再按住到 2 秒 → 完整手勢導覽。 */
+const SWIPE = Math.round(Math.min(window.innerWidth, window.innerHeight) * 0.12);
+const LONGPRESS_MS = 600, GUIDE_MS = 2000;
+const menusOpen = () =>
+    document.getElementById('search-overlay').classList.contains('open') ||
+    document.getElementById('vlm-overlay').classList.contains('open');
+
+let guideTimer = null, guideFired = false;
+function speakGestureGuide(){
+    vibrate(HAPTIC.longpress);
+    sayAlert('手勢說明。上滑，尋找物品。下滑，日常警報。' +
+             '左滑，紅綠燈模式。右滑，AI 描述或朗讀。' +
+             '雙擊，回到待機。長按，複誦目前模式。' +
+             '按住兩秒，聽這段說明。');
+}
+
+document.addEventListener('touchstart', e=>{
+    if (menusOpen()) return;
+    sx = e.changedTouches[0].screenX; sy = e.changedTouches[0].screenY;
+    lpFired = false;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(()=>{ lpFired = true; repeatCurrentMode(); }, LONGPRESS_MS);
+    // 再按住到 2 秒 → 完整手勢導覽(新使用者不必看畫面就能學會操作)
+    guideTimer = setTimeout(()=>{ guideFired = true; speakGestureGuide(); }, GUIDE_MS);
+}, {passive:true});
+
+document.addEventListener('touchmove', e=>{
+    if (guideTimer){ clearTimeout(guideTimer); guideTimer = null; }
+    if (menusOpen()) return;
+    const dx = Math.abs(e.changedTouches[0].screenX - sx);
+    const dy = Math.abs(e.changedTouches[0].screenY - sy);
+    if (dx > 12 || dy > 12) clearTimeout(lpTimer);     // 移動 → 取消長按
+}, {passive:true});
+
+document.addEventListener('touchend', e=>{
+    if (guideTimer){ clearTimeout(guideTimer); guideTimer = null; }
+    if (menusOpen()) return;
+    clearTimeout(lpTimer);
+    if (lpFired) return;                               // 長按已處理,不再判 tap/swipe
+
+    ex = e.changedTouches[0].screenX; ey = e.changedTouches[0].screenY;
+    const dx = ex - sx, dy = ey - sy;
+    if (guideFired){ guideFired = false; return; }
+    const still = Math.abs(dx) < SWIPE && Math.abs(dy) < SWIPE;
+    const now = Date.now();
+
+    if (still){
+        if (now - lastTap < 400 && now - lastTap > 0){    // 雙擊 → 待機
+            vibrate(HAPTIC.idle); setMode('idle'); lastTap = 0;
+        } else { lastTap = now; }
+        return;
+    }
+    handleGesture(dx, dy);
+}, {passive:true});
+
+function handleGesture(dx, dy){
+    if (Math.abs(dx) <= SWIPE && Math.abs(dy) <= SWIPE) return;
+    if (Math.abs(dx) > Math.abs(dy)){
+        if (dx > 0){ vibrate(HAPTIC.right); openVLMMenu(); }
+        else       { vibrate(HAPTIC.left);  setMode('traffic'); }
+    } else {
+        if (dy > 0){ vibrate(HAPTIC.down);  setMode('daily'); }
+        else       { vibrate(HAPTIC.up);    openSearchMenu(); }
+    }
+}
+
+/* =========================================================
+ * VLM 觸發 + 上下選單
+ * ========================================================= */
+function triggerVLM(subMode){
+    vibrate([100,50,100]);
+    sayUI('正在分析');
+    modeDisplay.classList.add('vlm-active');
+    setTimeout(()=>modeDisplay.classList.remove('vlm-active'), 6000);
+    fetch('/api/vlm', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ sub_mode:subMode })
+    }).then(r=>r.json())
+      .then(d=>{ if (d.status === 'busy') sayAlert('正在處理上一個請求'); })
+      .catch(e=>{ console.error('VLM:', e); sayAlert('分析失敗'); });
+}
+
+let vlmPending = null;
+const vlmOverlay = document.getElementById('vlm-overlay');
+const vlmDescribe = document.getElementById('vlm-describe');
+const vlmOcr = document.getElementById('vlm-ocr');
+
+function handleVLMClick(mode, label, el){
+    vibrate(HAPTIC.tap);
+    if (vlmPending === mode){ closeVLMMenu(); triggerVLM(mode); }
+    else {
+        vlmDescribe.classList.remove('pending');
+        vlmOcr.classList.remove('pending');
+        el.classList.add('pending'); vlmPending = mode;
+        sayUI(label + '，再按一次確認');
+    }
+}
+vlmDescribe.onclick = ()=>handleVLMClick('describe','場景描述',vlmDescribe);
+vlmOcr.onclick      = ()=>handleVLMClick('ocr','朗讀文字',vlmOcr);
+
+function openVLMMenu(){
+    sayUI('AI 視覺功能');
+    sayList('選項一，場景描述。選項二，朗讀文字。點選後再按一次確認');
+    vlmPending = null;
+    vlmDescribe.classList.remove('pending'); vlmOcr.classList.remove('pending');
+    vlmOverlay.classList.add('open');
+}
+function closeVLMMenu(){ vibrate(HAPTIC.tap); vlmOverlay.classList.remove('open'); vlmPending = null; }
+
+/* =========================================================
+ * 搜尋清單
+ * ========================================================= */
+const searchItems = [
+    {id:'cell phone',label:'手機'},{id:'cup',label:'杯子'},{id:'bottle',label:'瓶子'},
+    {id:'book',label:'書'},{id:'chair',label:'椅子'},{id:'table',label:'桌子'},
+    {id:'bench',label:'長椅'},{id:'door',label:'門'},{id:'tv',label:'電視'},
+    {id:'laptop',label:'筆電'},{id:'keyboard',label:'鍵盤'},{id:'mouse',label:'滑鼠'},
+    {id:'remote',label:'遙控器'},{id:'refrigerator',label:'冰箱'},{id:'microwave',label:'微波爐'},
+    {id:'oven',label:'烤箱'},{id:'sink',label:'洗手台'},{id:'toilet',label:'馬桶'},
+    {id:'fork',label:'叉子'},{id:'spoon',label:'湯匙'},{id:'bowl',label:'碗'},
+    {id:'scissors',label:'剪刀'},{id:'backpack',label:'背包'},{id:'umbrella',label:'雨傘'},
+    {id:'handbag',label:'手提包'},{id:'suitcase',label:'行李箱'},{id:'car',label:'汽車'},
+    {id:'motorcycle',label:'機車'},{id:'clock',label:'時鐘'},{id:'hair drier',label:'吹風機'},
+];
+/* =========================================================
+ * 連續滑動掃描選單
+ * ---------------------------------------------------------
+ * 互動模型(取代原本的分頁 + 兩次點選):
+ *   按住並左右滑動 → 手指位置線性對應整份清單,跨過一個項目就
+ *                    「立刻震動 + 念出名稱」
+ *   放開           → 停在該項目,狀態為「待確認」(黃底)
+ *   輕點任意位置   → 確認,開始搜尋
+ *   用力下滑       → 關閉
+ *
+ * 觸覺即時、語音節流:震動幾乎沒有延遲,而 speechSynthesis 有啟動延遲,
+ * 快速滑動時若每個項目都排隊念,會變成「手指停了還在念前面的」。
+ * 因此語音走 SCRUB_THROTTLE_MS 節流 + 打斷式播報(只念最新那個),
+ * 震動則完全不節流——手感必須跟得上手指。
+ * ★ 120ms 這個數字未經實機驗證,不同裝置的 speechSynthesis 啟動延遲
+ *   差異很大,實機測試時這是第一個要調的參數。
+ * ========================================================= */
+const SCRUB_THROTTLE_MS = 120;
+const overlay      = document.getElementById('search-overlay');
+const scrubArea    = document.getElementById('scrub-area');
+const scrubLabel   = document.getElementById('scrub-label');
+const scrubIndex   = document.getElementById('scrub-index');
+const scrubBar     = document.getElementById('scrub-bar');
+
+let scrubPos = -1;            // 目前停在第幾個項目 (-1 = 尚未選)
+let scrubPending = false;     // 是否處於「待確認」
+let lastScrubSay = 0;
+let scrubMoved = false;
+let scrubStartX = 0, scrubStartY = 0;
+
+function scrubSay(text){
+    const now = Date.now();
+    if (now - lastScrubSay < SCRUB_THROTTLE_MS) return;
+    lastScrubSay = now;
+    say(text, 1, true);       // interrupt:只念最新的,不排隊
+}
+
+function renderScrub(){
+    if (scrubPos < 0){
+        scrubLabel.innerText = '左右滑動選擇';
+        scrubIndex.innerText = `共 ${searchItems.length} 項`;
+        scrubBar.style.width = '0';
+        return;
+    }
+    const it = searchItems[scrubPos];
+    scrubLabel.innerText = it.label;
+    scrubIndex.innerText = `${scrubPos + 1} / ${searchItems.length}`
+                         + (scrubPending ? ' · 輕點確認' : '');
+    scrubBar.style.width = ((scrubPos + 1) / searchItems.length * 100) + '%';
+    document.getElementById('page-indicator').innerText =
+        `(${scrubPos + 1}/${searchItems.length})`;
+}
+
+function setScrubPos(idx, announce = true){
+    idx = Math.max(0, Math.min(searchItems.length - 1, idx));
+    if (idx === scrubPos) return;
+    scrubPos = idx;
+    vibrate(HAPTIC.tap);                       // 觸覺不節流
+    if (announce) scrubSay(searchItems[idx].label);
+    renderScrub();
+}
+
+function confirmScrub(){
+    if (scrubPos < 0) return;
+    const it = searchItems[scrubPos];
+    vibrate(HAPTIC.confirm);
+    closeSearchMenu();
+    setMode('search', it.id);
+}
+
+scrubArea.addEventListener('touchstart', e=>{
+    const t = e.changedTouches[0];
+    scrubStartX = t.clientX; scrubStartY = t.clientY;
+    scrubMoved = false;
+}, {passive:true});
+
+scrubArea.addEventListener('touchmove', e=>{
+    const t = e.changedTouches[0];
+    if (Math.abs(t.clientX - scrubStartX) > 8) scrubMoved = true;
+    if (!scrubMoved) return;
+    const r = scrubArea.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (t.clientX - r.left) / r.width));
+    scrubPending = false;
+    scrubArea.classList.remove('pending');
+    setScrubPos(Math.floor(ratio * searchItems.length));
+}, {passive:true});
+
+scrubArea.addEventListener('touchend', e=>{
+    const t = e.changedTouches[0];
+    const dy = t.clientY - scrubStartY;
+    if (!scrubMoved && Math.abs(dy) < SWIPE){
+        // 沒有滑動 = 輕點
+        if (scrubPending) confirmScrub();
+        else if (scrubPos >= 0){
+            scrubPending = true;
+            scrubArea.classList.add('pending');
+            renderScrub();
+            sayUI(searchItems[scrubPos].label + '，再輕點一次確認');
+        }
+        return;
+    }
+    if (dy > SWIPE * 2){ closeSearchMenu(); return; }   // 用力下滑關閉
+    if (scrubPos >= 0){
+        scrubPending = true;
+        scrubArea.classList.add('pending');
+        renderScrub();
+        sayUI(searchItems[scrubPos].label + '，輕點確認');
+    }
+}, {passive:true});
+
+function openSearchMenu(){
+    scrubPos = -1; scrubPending = false;
+    scrubArea.classList.remove('pending');
+    renderScrub();
+    overlay.classList.add('open');
+    sayUI('左右滑動選擇物品，放開後輕點確認');
+}
+function closeSearchMenu(){
+    vibrate(HAPTIC.tap);
+    overlay.classList.remove('open');
+    scrubPending = false;
+    scrubArea.classList.remove('pending');
+}
+
+/* =========================================================
+ * 輪詢 server 語音 (警報插隊) + 連線狀態
+ * ========================================================= */
+const connDot = document.getElementById('conn-dot');
+const connText = document.getElementById('conn-text');
+let wasBad = false;
+
+function setConn(ok){
+    connDot.classList.toggle('ok', ok);
+    connDot.classList.toggle('bad', !ok);
+    connText.textContent = ok ? '已連線' : '連線中斷';
+    if (!ok && !wasBad){ sayAlert('連線中斷'); wasBad = true; }
+    if (ok) wasBad = false;
+}
+function startPolling(){
+    setInterval(()=>{
+        fetch('/api/status')
+          .then(r=>{ if(!r.ok) throw new Error('status'); return r.json(); })
+          .then(d=>{ setConn(true); if (d.speech) sayAlert(d.speech); })
+          .catch(()=>setConn(false));
+    }, 400);
+}
+function tickClock(){
+    const d = new Date();
+    document.getElementById('clock').textContent =
+        `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+window.onload = ()=>{
+    setMode('idle');
+    tickClock(); setInterval(tickClock, 15000);
+    startPolling();
+};
+</script>
+</body>
+</html>

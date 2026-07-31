@@ -1,0 +1,26 @@
+# 手護視界 依賴版本鎖定
+# ----------------------------------------------------------------
+# 為什麼要鎖版本:depthai 與 paho-mqtt 都有過破壞相容性的改版
+#   depthai 3.x  : pipeline API 大改,本專案的 dai.node.* 寫法不相容
+#   paho-mqtt 2.x: Client() 建構式必須指定 CallbackAPIVersion
+#                  (hardware.py 已做雙版本防呆,但仍建議鎖住)
+# 上界不是保守,是實際踩過的坑。升版前請先跑 standalone_gen3_selftest.py
+# 與 stairs_fusion.py 的合成測試。
+
+depthai>=2.24.0,<3.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0,<2.0.0
+ultralytics>=8.1.0
+flask>=3.0.0
+paho-mqtt>=1.6.1
+requests>=2.31.0
+
+# ---- 選用 ----
+# AprilTag 官方 C 實作。沒有它會退回 cv2.aruco,但 cv2.aruco 不提供
+# decision_margin,信心階梯 L1 只能改用「連續兩幀確認」把關(見
+# memory_zone_state.py 檔頭)。實機建議裝。
+pupil-apriltags>=1.0.4
+
+# 手部偵測(Search 模式 REACH 階段)。已知在灰階/IR 下效能顯著下降,
+# 夜間手部偵測預計改用深度連通元件法,屆時此依賴可移除。
+mediapipe>=0.10.0
